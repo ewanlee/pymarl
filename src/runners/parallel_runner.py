@@ -97,6 +97,7 @@ class ParallelRunner:
 
             # Pass the entire batch of experiences up till now to the agents
             # Receive the actions for each agent at this timestep in a batch for each un-terminated env
+            # the shape of actions: batch_size x n_agents
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, bs=envs_not_terminated, test_mode=test_mode)
             cpu_actions = actions.to("cpu").numpy()
 
@@ -135,6 +136,13 @@ class ParallelRunner:
             # Receive data back for each unterminated env
             for idx, parent_conn in enumerate(self.parent_conns):
                 if not terminated[idx]:
+                    # the content of data is information of the all agents, include:
+                    # -- next observation of each agent (n_agents x observation_shape, array)
+                    # -- next state of environment (state_shape, array)
+                    # -- valid actions in next state of each agent (n_agent x action_shape, list)
+                    # -- the common reward of all agents (float)
+                    # -- terminated or not (boolean)
+                    # -- extra information (dict)
                     data = parent_conn.recv()
                     # Remaining data for this current timestep
                     post_transition_data["reward"].append((data["reward"],))
