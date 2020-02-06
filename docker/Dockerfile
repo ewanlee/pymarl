@@ -22,27 +22,29 @@ RUN curl -sk https://raw.githubusercontent.com/torch/distro/master/install-deps 
 RUN apt-get update
 RUN apt-get -y install python3
 RUN apt-get -y install python3-pip
-RUN pip3 install --upgrade pip
+RUN pip3 install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Python packages we use (or used at one point...)
-RUN pip3 install numpy scipy pyyaml matplotlib
-RUN pip3 install imageio
-RUN pip3 install tensorboard-logger
-RUN pip3 install pygame
+RUN pip3 install numpy scipy pyyaml matplotlib -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install imageio -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install tensorboard-logger -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install pygame -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install gym==0.9.4 -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install seaborn -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN mkdir /install
 WORKDIR /install
 
-RUN pip3 install jsonpickle==0.9.6
+RUN pip3 install jsonpickle==0.9.6 -i https://pypi.tuna.tsinghua.edu.cn/simple
 # install Sacred (from OxWhirl fork)
-RUN pip3 install setuptools
+RUN pip3 install setuptools -i https://pypi.tuna.tsinghua.edu.cn/simple
 RUN git clone https://github.com/oxwhirl/sacred.git /install/sacred && cd /install/sacred && python3 setup.py install
 
 #### -------------------------------------------------------------------
 #### install pytorch
 #### -------------------------------------------------------------------
-RUN pip3 install torch
-RUN pip3 install torchvision snakeviz pytest probscale
+RUN pip3 install torch -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip3 install torchvision snakeviz pytest probscale -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 ## -- SMAC
 RUN pip3 install git+https://github.com/oxwhirl/smac.git

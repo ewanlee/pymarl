@@ -30,7 +30,7 @@ class MultiAgentEnv(gym.Env):
         # environment parameters
         self.discrete_action_space = discrete_action
         # if true, action is a number 0...N, otherwise action is a one-hot N-dimensional vector
-        self.discrete_action_input = False
+        self.discrete_action_input = True
         # if true, even the action is continuous, action will be performed discretely
         self.force_discrete_action = world.discrete_action if hasattr(world, 'discrete_action') else False
         # if true, every agent has the same reward
@@ -83,7 +83,7 @@ class MultiAgentEnv(gym.Env):
             np.random.seed(seed)
 
     def seed(self, seed=None):
-         """ Returns the random seed used by the environment. """
+        """ Returns the random seed used by the environment. """
         return self._seed(seed)
 
     def _step(self, action_n):
@@ -97,6 +97,7 @@ class MultiAgentEnv(gym.Env):
             self._set_action(action_n[i], agent, self.action_space[i])
         # advance world state
         self.world.step()
+        self.time += 1
         # record observation for each agent
         for agent in self.agents:
             obs_n.append(self._get_obs(agent))
@@ -119,12 +120,17 @@ class MultiAgentEnv(gym.Env):
         # make the reward scale same as origin
         # by calculate the average value of rewards
         reward = sum(reward_n) / self.n
-        # Note: the fullobs_collect_treasure environment will never terminated
-        terminated = (sum(done_n) == self.n)
-        info = info_n
+        # Note: the fullobs_collect_treasure environment will never terminated except reach the episode_limit timestep
+        if self.time >= self.episode_limit:
+            terminated = True
+        else:
+            terminated = (sum(done_n) == self.n)
+        # For compatibility with pymarl
+        info = {'n': False if len(info_n['n'][0]) == 0 else info_n['n'][0]}
         return reward, terminated, info
 
     def _reset(self):
+        self.time = 0
         # reset world
         self.reset_callback(self.world)
         # reset renderer
@@ -204,8 +210,7 @@ class MultiAgentEnv(gym.Env):
     def get_avail_agent_actions(self, agent_id):
         """ Returns the available actions for agent_id """
         _action_space = self.action_space[agent_id]
-        size = _action_space.high - _action_space.low + 1
-        return [1] * size
+        return [1] * _action_space.n
 
     def get_avail_actions(self):
         """ Returns the available actions of all agents in a list. """
@@ -218,7 +223,8 @@ class MultiAgentEnv(gym.Env):
     def get_total_actions(self):
         """ Returns the total number of actions an agent could ever take """
         # TODO: This is only suitable for a discrete 1 dimensional action space for each agent
-        total_actions = set(self.get_avail_actions())
+        total_actions = set(list(map(
+            len, self.get_avail_actions())))
         assert len(total_actions) == 1
         return list(total_actions)[0]
 
@@ -426,6 +432,10 @@ class MultiAgentEnv(gym.Env):
                     "n_agents": self.n,
                     "episode_limit": self.episode_limit}
         return env_info
+
+    def get_stats(self):
+        stats = {'episode_limit': self.episode_limit}
+        return stats
 
 
 # vectorized wrapper for a batch of multi-agent environments

@@ -1,7 +1,7 @@
 import numpy as np
 import seaborn as sns
-from .core import World, Agent, Landmark
-from .scenario import BaseScenario
+from envs.mpe_scenarios.core import World, Agent, Landmark
+from envs.mpe_scenarios.scenario import BaseScenario
 
 class Scenario(BaseScenario):
     def make_world(self):
@@ -136,6 +136,8 @@ class Scenario(BaseScenario):
             obs = []
             # give speaker index of their listener
             obs += [agent.listen_ind == np.arange(len(world.listeners))]
+            # make the observation shape is same for both type agents
+            obs += [np.zeros_like(world.speakers[0].state.c)]
             # speaker gets position of listener and goal
             obs += [agent.goal_a.state.p_pos, agent.goal_b.state.p_pos]
 

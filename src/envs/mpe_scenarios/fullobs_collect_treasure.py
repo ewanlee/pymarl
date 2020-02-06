@@ -1,7 +1,7 @@
 import numpy as np
 import seaborn as sns
-from .core import World, Agent, Landmark, Wall
-from .scenario import BaseScenario
+from envs.mpe_scenarios.core import World, Agent, Landmark, Wall
+from envs.mpe_scenarios.scenario import BaseScenario
 
 class Scenario(BaseScenario):
     def make_world(self):
