@@ -28,20 +28,32 @@ class COMACritic(nn.Module):
 
     def _build_inputs(self, batch, t=None):
         bs = batch.batch_size
+        # print('bs: {}'.format(bs))
         max_t = batch.max_seq_length if t is None else 1
+        # print('max_t: {}'.format(max_t))
         ts = slice(None) if t is None else slice(t, t+1)
+        # print('ts: {}'.format(ts))
         inputs = []
         # state
+        # print('state shape: {}'.format(batch["state"][:, ts].shape))
         inputs.append(batch["state"][:, ts].unsqueeze(2).repeat(1, 1, self.n_agents, 1))
+        # print('state reshape: {}'.format(inputs[0].shape))
 
         # observation
+        # print('obs shape: {}'.format(batch["obs"][:, ts].shape))
         inputs.append(batch["obs"][:, ts])
 
         # actions (masked out by agent)
+        # print('act shape: {}'.format(batch["actions_onehot"][:, ts].shape))
+        # assert False
         actions = batch["actions_onehot"][:, ts].view(bs, max_t, 1, -1).repeat(1, 1, self.n_agents, 1)
         agent_mask = (1 - th.eye(self.n_agents, device=batch.device))
         agent_mask = agent_mask.view(-1, 1).repeat(1, self.n_actions).view(self.n_agents, -1)
+        # print('agent mask shape: {}'.format(agent_mask.shape))
+        # print(agent_mask)
         inputs.append(actions * agent_mask.unsqueeze(0).unsqueeze(0))
+        # print('action share after mask: {}'.format(
+        #     (actions * agent_mask.unsqueeze(0).unsqueeze(0)).shape))
 
         # last actions
         if t == 0:
@@ -56,6 +68,8 @@ class COMACritic(nn.Module):
         inputs.append(th.eye(self.n_agents, device=batch.device).unsqueeze(0).unsqueeze(0).expand(bs, max_t, -1, -1))
 
         inputs = th.cat([x.reshape(bs, max_t, self.n_agents, -1) for x in inputs], dim=-1)
+        # print('inputs shape: {}'.format(inputs.shape))
+        # assert False
         return inputs
 
     def _get_input_shape(self, scheme):

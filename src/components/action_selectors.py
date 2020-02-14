@@ -28,6 +28,18 @@ class MultinomialActionSelector():
 
         return picked_actions
 
+    # for maac_controller
+    def select_action_maac(self, agent_inputs, avail_actions, test_mode=False):
+        masked_policies = agent_inputs.clone()
+        masked_policies[avail_actions == 0.0] = 0.0
+
+        if test_mode and self.test_greedy:
+            picked_actions = masked_policies.max(dim=2)[1]
+        else:
+            picked_actions = Categorical(masked_policies).sample().long()
+
+        return picked_actions
+
 
 REGISTRY["multinomial"] = MultinomialActionSelector
 
@@ -46,6 +58,24 @@ class EpsilonGreedyActionSelector():
         # Assuming agent_inputs is a batch of Q-Values for each agent bav
         self.epsilon = self.schedule.eval(t_env)
 
+        if test_mode:
+            # Greedy action selection only
+            self.epsilon = 0.0
+
+        # mask actions that are excluded from selection
+        masked_q_values = agent_inputs.clone()
+        masked_q_values[avail_actions == 0.0] = -float("inf")  # should never be selected!
+
+        random_numbers = th.rand_like(agent_inputs[:, :, 0])
+        pick_random = (random_numbers < self.epsilon).long()
+        random_actions = Categorical(avail_actions.float()).sample().long()
+
+        picked_actions = pick_random * random_actions + (1 - pick_random) * masked_q_values.max(dim=2)[1]
+        return picked_actions
+
+    def select_action_maac(self, agent_inputs, avail_actions, test_mode=False):
+
+        # Assuming agent_inputs is a batch of Q-Values for each agent bav
         if test_mode:
             # Greedy action selection only
             self.epsilon = 0.0

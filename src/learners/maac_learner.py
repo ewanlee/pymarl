@@ -1,12 +1,14 @@
 import copy
 from components.episode_buffer import EpisodeBatch
 from modules.critics.coma import COMACritic
+from modules.critics.maac import MAACCritic
 from utils.rl_utils import build_td_lambda_targets
 import torch as th
 from torch.optim import RMSprop
+from functools import partial
 
 
-class COMALearner:
+class MAACLearner:
     def __init__(self, mac, scheme, logger, args):
         self.args = args
         self.n_agents = args.n_agents
@@ -19,48 +21,42 @@ class COMALearner:
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        self.critic = COMACritic(scheme, args)
+        self.critic = MAACCritic(scheme, args)
         self.target_critic = copy.deepcopy(self.critic)
+
+        self.policies = partial(self.mac, target=False)
+        self.target_policies = partial(self.mac, target=True)
 
         self.agent_params = list(mac.parameters())
         self.critic_params = list(self.critic.parameters())
         self.params = self.agent_params + self.critic_params
 
-        self.agent_optimiser = RMSprop(params=self.agent_params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
-        self.critic_optimiser = RMSprop(params=self.critic_params, lr=args.critic_lr, alpha=args.optim_alpha, eps=args.optim_eps)
+        self.gamma = args.gamma
+        self.tau = args.tau
+        self.reward_scale = args.reward_scale
+
+        self.agent_optimiser = RMSprop(params=self.agent_params, lr=args.lr, 
+                                       alpha=args.optim_alpha, eps=args.optim_eps)
+        self.critic_optimiser = RMSprop(params=self.critic_params, lr=args.critic_lr,
+                                        alpha=args.optim_alpha, eps=args.optim_eps)
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
         bs = batch.batch_size
         max_t = batch.max_seq_length
-        print('max_t: ', max_t)
         rewards = batch["reward"][:, :-1]
-        # print('rewards shape: ', rewards.shape)
         actions = batch["actions"][:, :]
-        # print('actions shape: ', actions.shape)
         terminated = batch["terminated"][:, :-1].float()
-        # print('terminated shape: ', terminated.shape)
         mask = batch["filled"][:, :-1].float()
-        # mask_bak = copy.deepcopy(mask)
-        # print('mask shape: ', mask.shape)
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
-        # if th.sum(mask_bak - mask) != 0:
-            # for i in range(bs):
-                # print('------------')
-                # print(batch["terminated"][i].flatten())
-                # print(batch["filled"][i].flatten())
-                # print(mask_bak[i].flatten())
-                # print(terminated[i].flatten())
-                # print(mask[i].flatten())
-            # assert False
         avail_actions = batch["avail_actions"][:, :-1]
 
         critic_mask = mask.clone()
 
         mask = mask.repeat(1, 1, self.n_agents).view(-1)
 
-        q_vals, critic_train_stats = self._train_critic(batch, rewards, terminated, actions, avail_actions,
-                                                        critic_mask, bs, max_t)
+        q_vals, critic_train_stats = self._train_critic(
+            batch, rewards, terminated, actions, avail_actions, critic_mask, bs, max_t)
 
         actions = actions[:,:-1]
 
@@ -112,19 +108,59 @@ class COMALearner:
             self.logger.log_stat("pi_max", (pi.max(dim=1)[0] * mask).sum().item() / mask.sum().item(), t_env)
             self.log_stats_t = t_env
 
+    def _update_critic(self, batch, soft=True, logger=None, **kwargs):
+        """
+        Update central critic for all agents
+        """
+        obs, acs, rews, next_obs, dones = sample
+        # Q loss
+        next_acs = []
+        next_log_pis = []
+        for pi, ob in zip(self.target_policies, next_obs):
+            curr_next_ac, curr_next_log_pi = pi(ob, return_log_pi=True)
+            next_acs.append(curr_next_ac)
+            next_log_pis.append(curr_next_log_pi)
+        trgt_critic_in = list(zip(next_obs, next_acs))
+        critic_in = list(zip(obs, acs))
+        next_qs = self.target_critic(trgt_critic_in)
+        critic_rets = self.critic(critic_in, regularize=True,
+                                  logger=logger, niter=self.niter)
+        q_loss = 0
+        for a_i, nq, log_pi, (pq, regs) in zip(range(self.nagents), next_qs,
+                                               next_log_pis, critic_rets):
+            target_q = (rews[a_i].view(-1, 1) +
+                        self.gamma * nq *
+                        (1 - dones[a_i].view(-1, 1)))
+            if soft:
+                target_q -= log_pi / self.reward_scale
+            q_loss += MSELoss(pq, target_q.detach())
+            for reg in regs:
+                q_loss += reg  # regularizing attention
+        q_loss.backward()
+        self.critic.scale_shared_grads()
+        grad_norm = torch.nn.utils.clip_grad_norm(
+            self.critic.parameters(), 10 * self.nagents)
+        self.critic_optimizer.step()
+        self.critic_optimizer.zero_grad()
+
+        if logger is not None:
+            logger.add_scalar('losses/q_loss', q_loss, self.niter)
+            logger.add_scalar('grad_norms/q', grad_norm, self.niter)
+        self.niter += 1
+
     def _train_critic(self, batch, rewards, terminated, actions, avail_actions, mask, bs, max_t):
         # Optimise critic
+        # batch_size x n_timesteps x n_agents x act_dim
         target_q_vals = self.target_critic(batch)[:, :]
-        # print('target_q_vals shape: ', target_q_vals.shape)
+        # batch_size x n_timesteps x n_agents
         targets_taken = th.gather(target_q_vals, dim=3, index=actions).squeeze(3)
-        # print('targets_taken shape ', targets_taken.shape)
 
         # Calculate td-lambda targets
+        # batch_size x (n_timesteps - 1) x n_agents
         targets = build_td_lambda_targets(rewards, terminated, mask, targets_taken, self.n_agents, self.args.gamma, self.args.td_lambda)
-        # print('targets shape: ', targets.shape)
 
+        # batch_size x (n_timesteps - 1) x n_agents x act_dim
         q_vals = th.zeros_like(target_q_vals)[:, :-1]
-        # print('q_vals shape: ', q_vals.shape)
 
         running_log = {
             "critic_loss": [],
@@ -135,9 +171,8 @@ class COMALearner:
         }
 
         for t in reversed(range(rewards.size(1))):
+            # batch_size x n_agents (same for all agents)
             mask_t = mask[:, t].expand(-1, self.n_agents)
-            # print('mask_t shape: ', mask_t.shape)
-            # assert False
             if mask_t.sum() == 0:
                 continue
 
