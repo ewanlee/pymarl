@@ -198,10 +198,8 @@ class EpisodeBatch:
         return th.sum(self.data.transition_data["filled"], 1).max(0)[0]
 
     def __repr__(self):
-        return "EpisodeBatch. Batch Size:{} Max_seq_len:{} Keys:{} Groups:{}".format(self.batch_size,
-                                                                                     self.max_seq_length,
-                                                                                     self.scheme.keys(),
-                                                                                     self.groups.keys())
+        return "EpisodeBatch. Batch Size:{} Max_seq_len:{} Keys:{} Groups:{}".format(
+            self.batch_size, self.max_seq_length, self.scheme.keys(), self.groups.keys())
 
 
 class ReplayBuffer(EpisodeBatch):
@@ -234,9 +232,11 @@ class ReplayBuffer(EpisodeBatch):
     def sample(self, batch_size):
         assert self.can_sample(batch_size)
         if self.episodes_in_buffer == batch_size:
+            # print('\n------------------I am here---------------------\n')
             return self[:batch_size]
         else:
             # Uniform sampling only atm
+            # print('\n------------------You are here---------------------\n')
             ep_ids = np.random.choice(self.episodes_in_buffer, batch_size, replace=False)
             return self[ep_ids]
 

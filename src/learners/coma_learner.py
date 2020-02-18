@@ -33,7 +33,6 @@ class COMALearner:
         # Get the relevant quantities
         bs = batch.batch_size
         max_t = batch.max_seq_length
-        print('max_t: ', max_t)
         rewards = batch["reward"][:, :-1]
         # print('rewards shape: ', rewards.shape)
         actions = batch["actions"][:, :]

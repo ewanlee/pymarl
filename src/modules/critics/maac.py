@@ -28,7 +28,7 @@ class MAACCritic(nn.Module):
         # assume the state_shape and action_shape of all agents are identical
         idim = state_shape + action_shape
         odim = action_shape
-        for _ in self.n_agents:
+        for _ in range(self.n_agents):
             encoder = nn.Sequential()
             if args.norm_in:
                 encoder.add_module('enc_bn', nn.BatchNorm1d(idim, affine=False))
@@ -80,6 +80,14 @@ class MAACCritic(nn.Module):
         Parameters shared across agents and reward heads
         """
         return chain(*[m.parameters() for m in self.shared_modules])
+
+    def scale_shared_grads(self):
+        """
+        Scale gradients for parameters that are shared since they accumulate
+        gradients from the critic loss function multiple times
+        """
+        for p in self.shared_parameters():
+            p.grad.data.mul_(1. / self.n_agents)
 
     def forward(self, batch, t=None, agents=None, return_q=True, return_all_q=False,
                 regularize=False, return_attend=False, logger=None, niter=0):
@@ -214,7 +222,9 @@ class MAACCritic(nn.Module):
         inputs_state = inputs_state.permute(2, 0, 1, 3)
         # n_agents x batch_size x n_timesteps x act_dim
         inputs_action = inputs_action.permute(2, 0, 1, 3)
-        inputs = [(s, a) for s, a in zip(inputs_state, inputs_action)]
+        inputs = [(s.contiguous().view(batch.batch_size * batch.max_seq_length, -1), 
+                   a.contiguous().view(batch.batch_size * batch.max_seq_length, -1)) 
+                   for s, a in zip(inputs_state, inputs_action)]
         return inputs
 
     def _get_input_shape(self, scheme):

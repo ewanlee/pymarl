@@ -18,7 +18,8 @@ class MAACMAC:
 
         self.action_selector = action_REGISTRY[args.action_selector](args)
 
-        self.hidden_states = None
+        self.hidden_states = [None] * self.n_agents
+        self.target_hidden_states = [None] * self.n_agents
 
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False, target=False):
         # Only select actions for the selected batch elements in bs
@@ -37,80 +38,88 @@ class MAACMAC:
         agent_inputs = self._build_inputs(ep_batch, t)
         avail_actions = ep_batch["avail_actions"][:, t]
         if not target:
-            for i in self.n_agents:
+            for i in range(self.n_agents):
                 all_agent_outs[i], self.hidden_states[i] = self.agents[i](
                     agent_inputs[i], self.hidden_states[i])
         else:
-            for i in self.n_agents:
-                all_agent_outs[i], self.hidden_states[i] = self.target_agents[i](
-                    agent_inputs[i], self.hidden_states[i])
+            for i in range(self.n_agents):
+                all_agent_outs[i], self.target_hidden_states[i] = self.target_agents[i](
+                    agent_inputs[i], self.target_hidden_states[i])
 
         # Softmax the agent outputs if they're policy logits
         if self.agent_output_type == "pi_logits":
 
-            if getattr(self.args, "mask_before_softmax", True):
-                raise NotImplementedError
-                # Make the logits for unavailable actions very negative to minimise their affect on the softmax
-                # reshaped_avail_actions = avail_actions.reshape(ep_batch.batch_size * self.n_agents, -1)
-                # agent_outs[reshaped_avail_actions == 0] = -1e10
+            if not return_extras:
+                for i in range(self.n_agents):
+                    if getattr(self.args, "mask_before_softmax", True):
+                        # Make the logits for unavailable actions very negative to minimise their affect on the softmax
+                        reshaped_avail_action = avail_actions.permute(1, 0, 2)[i]
+                        all_agent_outs[i][reshaped_avail_action == 0] = -1e10
+                    
+                    all_agent_outs[i] = th.nn.functional.softmax(all_agent_outs[i], dim=-1)
+                    
+                    if not test_mode:
+                        # Epsilon floor
+                        epsilon_action_num = all_agent_outs[i].size(-1)
+                        if getattr(self.args, "mask_before_softmax", True):
+                            # With probability epsilon, we will pick an available action uniformly
+                            epsilon_action_num = reshaped_avail_action.sum(dim=1, keepdim=True).float()
 
-            all_agent_outs_logit = copy.deepcopy(all_agent_outs)
+                        all_agent_outs[i] = ((1 - self.action_selector.epsilon) * all_agent_outs[i] + \
+                                th.ones_like(all_agent_outs[i]) * \
+                                    self.action_selector.epsilon/epsilon_action_num)
 
-            for i in self.n_agents:
-                all_agent_outs[i] = th.nn.functional.softmax(all_agent_outs[i], dim=-1)
-            if not test_mode:
-                # Epsilon floor
-                epsilon_action_nums = []
-                for i in self.n_agents:
-                    epsilon_action_nums.append(all_agent_outs[0].size(-1))
-                assert len(set(epsilon_action_nums)) == 1
-                if getattr(self.args, "mask_before_softmax", True):
-                    raise NotImplementedError
-                    # With probability epsilon, we will pick an available action uniformly
-                    # epsilon_action_num = reshaped_avail_actions.sum(dim=1, keepdim=True).float()
+                        if getattr(self.args, "mask_before_softmax", True):
+                            # Zero out the unavailable actions
+                            all_agent_outs[i][reshaped_avail_action == 0] = 0.0
+                    all_agent_outs[i] = all_agent_outs[i].unsqueeze(0)
 
-                for i in self.n_agents:
-                    all_agent_outs[i] = ((1 - self.action_selector.epsilon) * all_agent_outs[i] + \
-                        th.ones_like(all_agent_outs[i]) * \
-                            self.action_selector.epsilon/epsilon_action_nums[i])
+                return th.cat(all_agent_outs, 0).permute(1, 0, 2)
 
-                if getattr(self.args, "mask_before_softmax", True):
-                    raise NotImplementedError
-                    # Zero out the unavailable actions
-                    # agent_outs[reshaped_avail_actions == 0] = 0.0
-
-            all_agent_outs = th.tensor(all_agent_outs).cuda()
-
-            if return_extras:
-                all_agent_outs_logit = th.tensor(all_agent_outs_logit).cuda()
-                chosen_actions = self.action_selector.select_action_maac(
-                    all_agent_outs.permute(1, 0, 2), 
-                    avail_actions, test_mode=test_mode).permute(1, 0, 2)
+            else:
                 all_agent_rets = []
                 for i in range(self.n_agents):
-                    rets = [chosen_actions[i]]
+                    out = all_agent_outs[i]
+                    reshaped_avail_action = avail_actions.permute(1, 0, 2)[i]
+                    out[reshaped_avail_action == 0] = -1e10
+
+                    probs = th.nn.functional.softmax(out, dim=-1)
+                    
+                    int_act = th.multinomial(probs, 1)
+
+                    rets = [int_act]
+
                     if return_log_pi or return_entropy:
-                        log_probs = F.log_softmax(all_agent_outs_logit[i], dim=1)
+                        log_probs = F.log_softmax(out, dim=1)
                     if return_all_probs:
-                        rets.append(all_agent_outs[i])
+                        rets.append(probs)
                     if return_log_pi:
                         # return log probability of selected action
-                        rets.append(log_probs[i].gather(1, chosen_actions[i]))
+                        rets.append(log_probs.gather(1, int_act))
                     if regularize:
-                        rets.append([(all_agent_outs_logit[i]**2).mean()])
+                        reg = out ** 2
+                        reg[reshaped_avail_action == 0] = 0
+                        rets.append([reg.sum() / reshaped_avail_action.sum()])
                     if return_entropy:
-                        rets.append(-(log_probs * all_agent_outs[i]).sum(1).mean())
+                        rets.append(-(log_probs * probs).sum(1).mean())
                     if len(rets) == 1:
-                        rets = rets[0]
-                    all_agent_rets.append(rets)
+                        all_agent_rets.append(rets[0])
+                    else:
+                        all_agent_rets.append(rets)
+
                 return all_agent_rets
 
-        return all_agent_outs.permute(1, 0, 2)
-
-    def init_hidden(self, batch_size):
+    def init_hidden(self, batch_size, target=False):
         # n_agents x batch_size x hidden_dim
-        self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(
-            batch_size, self.n_agents, -1).permute(1, 0, 2)  # bav
+        if not target:
+            for i in range(self.n_agents):
+                self.hidden_states[i] = self.agents[0].init_hidden().unsqueeze(0).expand(
+                    batch_size, 1, -1).permute(1, 0, 2)
+        else:
+            for i in range(self.n_agents):
+                self.target_hidden_states[i] = \
+                    self.target_agents[0].init_hidden().unsqueeze(0).expand(
+                        batch_size, 1, -1).permute(1, 0, 2)
 
     def parameters(self):
         params = []

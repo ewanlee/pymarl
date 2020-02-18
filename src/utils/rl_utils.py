@@ -13,3 +13,24 @@ def build_td_lambda_targets(rewards, terminated, mask, target_qs, n_agents, gamm
     # Returns lambda-return from t=0 to t=T-1, i.e. in B*T-1*A
     return ret[:, 0:-1]
 
+def disable_gradients(module):
+    for p in module.parameters():
+        p.requires_grad = False
+
+def enable_gradients(module):
+    for p in module.parameters():
+        p.requires_grad = True
+
+# https://github.com/ikostrikov/pytorch-ddpg-naf/blob/master/ddpg.py#L11
+def soft_update(target, source, tau):
+    """
+    Perform DDPG soft update (move target params toward source based on weight
+    factor tau)
+    Inputs:
+        target (torch.nn.Module): Net to copy parameters to
+        source (torch.nn.Module): Net whose parameters to copy
+        tau (float, 0 < x < 1): Weight factor for update
+    """
+    for target_param, param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
+
